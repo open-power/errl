@@ -1,0 +1,595 @@
+
+/*****************************************************************************/
+// I n c l u d e s
+/*****************************************************************************/
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <regex.h> 
+
+#ifdef _AIX
+#include <cstdlib>   
+#include <iostream>   
+#include <cstring>
+#include <memory>
+#include <list> 
+#include <fstream>
+#include <vector>
+#include <string>
+#include <sstream>
+#include <popt.h>
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#ifndef _AIX
+#include <getopt.h>
+#endif
+
+#include <errlentry.H>
+#include <errlusrparser.H>
+#include <errlcmdline.H>    //sm_aix
+#include <errlxmlparser.H>
+
+#include <utilbase.H>
+#include <utilfile.H>
+#include <utilmem.H>
+#include <errl_service_codes.H>
+#include <errlusrparser.H>
+
+/*****************************************************************************/
+// Synonyms
+/*****************************************************************************/
+typedef std::vector<errlHndl_t>		ToolElogs_t;
+typedef std::vector<std::string>	TempFiles_t;
+
+/*****************************************************************************/
+// ENUMs
+/*****************************************************************************/
+enum toolstatus_t
+{
+    ERRL_TOOL_SUCCESS		= 0x00,
+    ERRL_TOOL_DISPLAY_FILEENTRY	= 0x02,
+};
+
+
+
+const uint32_t ERRL_ENTRY_MAX = 16384;
+
+char      g_buffer[ERRL_ENTRY_MAX];
+TempFiles_t     g_TempFiles;
+TempFiles_t g_TempFilesHB;         
+/*****************************************************************************/
+// F o r w a r d s
+/*****************************************************************************/
+toolstatus_t errlDisplayEntryFromFile( arguments & i_args);
+errlstatus_t errlLoadLogs( arguments & i_args, ToolElogs_t & o_list );
+void errlPrintLog( ErrlEntry & i_Log, arguments & i_args );
+
+/*****************************************************************************/
+// Global
+/*****************************************************************************/
+ErrlUsrParser	g_Parser( stdout );
+
+using namespace std;
+
+void usage ()
+{
+    printf ("\nUsage: errl -d -t <stringfile> --file=filename\n");
+}
+
+
+/*****************************************************************************/
+// Executable entry point
+/*****************************************************************************/
+int main (int argc, char **argv)
+{
+    toolstatus_t l_rc = ERRL_TOOL_SUCCESS; 
+
+    // Argument table: Set to defaults
+    arguments args;
+
+    memset(&args,0,sizeof(args));
+
+
+    /* Parse our arguments; every option seen by parse_opt will
+    be reflected in arguments. */
+
+
+#ifndef _AIX
+
+     //specifying the expected options
+     static struct option long_options[] =
+     {
+         {"description",  no_argument,    0, 'd'},
+         {"file"  ,       required_argument,  0, 'f'},
+         {0,0,0,0}
+     };
+
+     int opt = 0;
+     int long_index = 0;
+     int DISPLAY = 0;
+
+     if ( argc == 1 )
+     {
+        usage();
+     }
+     args.iv_skipTrace = true;
+     while ( (opt = getopt_long(argc, argv, "df:t:", long_options, &long_index)) != -1)
+     {
+         switch (opt)
+         {
+             case 'd': DISPLAY = 1;
+                 //printf ("Got DISPLAY option\n");
+                       break;
+             case 'f' :
+             {
+                 if ( DISPLAY )
+                 {
+                   args.iv_filename = optarg;
+                   l_rc = errlDisplayEntryFromFile( args );
+                 }
+                 else
+                 {
+                   usage();
+                 }
+             }
+                  break;
+             case 't' :
+             {
+                  args.iv_trace = optarg;
+                  args.iv_skipTrace = false;
+             }
+                  break;
+             default: usage();
+          }
+      }//end while
+           
+     //sm_aix end for getopt_long  
+#endif
+
+#ifdef _AIX    
+
+    int ch = -1;
+    int DISPLAY = 0;
+    arguments arg;
+    poptContext opt_con;   
+    static struct poptOption options_table[] = {
+       { "d", 'd', POPT_ARG_NONE, NULL, 'd', "describe the error log", 0},
+       { "X", 'X', POPT_ARG_NONE, NULL, 'X', "display error log in XML",0},
+       {"file", 'f', POPT_ARG_STRING, &arg.iv_filename, 'f', "follow with the filename with path", 0},
+       POPT_AUTOHELP
+       { NULL, 0, 0, NULL, 0 }
+       };
+
+    opt_con = poptGetContext(NULL, argc, (const char **)argv,options_table, 0);
+ 
+    while ((ch = poptGetNextOpt(opt_con)) >= 0) {
+     //   printf("between while & switch: ch = %d\n", ch);
+        switch (ch) {
+            case 'd': DISPLAY = 1;
+                    //  printf("\nDISPLAY=1 got set\n");
+                      break;
+            case 'X':
+                  arg.iv_xml=1;
+                  break;
+
+            case 'f':
+            {
+             if (DISPLAY)
+             {
+                  //printf ("\ncalling errlDisplayEntryFromFile");
+                  //printf("\nfilename is %s\n",arg.iv_filename);
+                  l_rc = errlDisplayEntryFromFile(arg);
+             }
+                 
+            }
+            break;
+           default: printf("\nentered default");
+                    break;
+        }
+    //printf ("\ngoing up in the while loop\n");
+    } //end while
+    
+    //not required as this is for left over arguments which are not mentioned in the option table
+    while (poptPeekArg(opt_con) != NULL) {
+        printf("\nentered while loop poptPeekArg");
+
+        char *dt2 = (char *)poptGetArg(opt_con);
+        printf("poptGetArg returned arg: \"%s\"\n",dt2);
+    }
+#endif        
+
+    return (int)l_rc;
+}
+
+
+/*****************************************************************************/
+// Display Entry From File specified 
+/*****************************************************************************/
+toolstatus_t errlDisplayEntryFromFile( arguments & i_args)
+{
+    toolstatus_t   l_rc = ERRL_TOOL_SUCCESS;
+    errlstatus_t   l_sts = ERRL_STATUS_SUCCESS;
+    ToolElogs_t	   l_elogs;
+    errlHndl_t	   l_errl;
+
+   // printf ("\nentered errlDisplayEntryFromFile, calling errlLoadLogs");  //sm_aix
+    // Load the log from persistant store & display
+    l_sts = errlLoadLogs( i_args, l_elogs );
+
+//printf ("\nerrlDisplayEntryFromFile: returned from errlLoadLogs");  //sm_aix
+
+    for (uint32_t i=0; i < l_elogs.size(); i++)
+    {
+	l_errl = l_elogs[i];
+	if ( l_sts == ERRL_STATUS_SUCCESS )
+	{
+            if ( i_args.iv_xml )
+            {
+            //printf("\nprinting file format instead of xml\n"); //sm0
+          // ErrlEntry l_tempLog = *l_errl;
+           //errlPrintLog( *l_errl, i_args );
+                char        l_eid[9] = {0}; //sm0 fdt
+                FILE *      l_fptr = NULL;
+                string      l_name;
+
+                sprintf( l_eid,"%X", ntohl(l_elogs[i]->eid()) );
+//         printf("\ngenerating eid %x\n",htonl(l_elogs[i]->eid())); //sm0
+         //sprintf( l_eid,"%X", l_tempLog.eid() );  //sm0
+
+
+                l_name += l_eid;
+                l_name += ".xml";
+
+                if((l_fptr = fopen( l_name.c_str(), "w+" )) != NULL)    //ri02 , mi03
+                {
+                    // Disable Buffering
+                    setvbuf(l_fptr,NULL,_IONBF,0);
+
+                    ErrlXmlParser       l_Parser( l_fptr );
+
+                    l_Parser.StartXMLfile();
+
+                    l_errl->print( l_Parser );
+
+                    l_Parser.EndXMLfile();
+                }
+                else
+                {
+                    cout << "Error in opening the file" << endl;            //ri02
+                    l_rc = ERRL_TOOL_DISPLAY_FILEENTRY;
+                }  //sm0
+            }
+	    else if ( i_args.iv_ptype == RAW )
+	    {
+            g_Parser.PrintHexDump(g_buffer,l_errl->flattenedSize());
+	    }
+	    else 
+	    {
+		errlPrintLog( *l_errl, i_args );
+	    }
+	}
+	else
+	{
+	    cout << "Bad Status returned from parsing attempt from file request.\n";
+	    
+	    l_rc = ERRL_TOOL_DISPLAY_FILEENTRY;	
+	}
+
+	g_Parser.PrintRealBlank();
+    }
+
+    // delete the objects in the vector	
+    for (uint32_t i=0; i< l_elogs.size(); i++)
+    {
+	delete l_elogs[i];
+    }
+
+    
+    return l_rc;
+}
+
+
+
+/*****************************************************************************/
+// Load a log from persistant storage
+/*****************************************************************************/
+errlstatus_t errlLoadLogs( arguments & i_args, ToolElogs_t & o_list )
+{
+    errlstatus_t    l_rc = ERRL_STATUS_SUCCESS;
+    std::string	    l_filename = i_args.iv_filename;
+    UtilFile 	*   l_pFile = 0;
+    errlHndl_t      l_hndl = NULL;
+    UtilMem	    l_LogData;
+    uint32_t 	    l_bufsz = ERRL_ENTRY_MAX; 
+    uint16_t	    l_tmp = 0;
+    bool	    l_eof = false;
+   
+
+    if ( l_filename == "stdin" )
+    {
+	l_pFile = new UtilFile( stdin );
+    }
+    else
+    {
+	l_pFile = new UtilFile( l_filename.c_str() );
+
+	l_pFile->Open( "r" );
+    }
+    
+    // Transfer the data from the file stream to the 
+    // memory buffer
+    while ( 1 )
+    {
+	l_LogData.write( g_buffer, l_pFile->read( g_buffer, l_bufsz ) );
+
+	l_eof = l_pFile->eof();
+
+    if ( l_eof )
+    {
+        break;
+    }
+    }
+
+
+    // Re-create the object
+	l_LogData.seek( 0, l_LogData.START );
+	
+   while(!l_hndl && l_LogData.size() > l_LogData.seek(0,l_LogData.CURRENT ))
+	{
+	    // reset tmp
+	    l_tmp = 0;
+	    
+	    // Find the log starting point
+	    while ( l_tmp != ERRL_SID_PRIVATE_HEADER &&  l_LogData.size() > l_LogData.seek(0,l_LogData.CURRENT ))
+	    {
+		uint8_t	l_start = 0;
+		if(l_tmp != 0)
+                {
+                  l_tmp = 0;
+                  l_LogData.seek( -1 , l_LogData.CURRENT );
+                } 
+		l_LogData >> l_start;
+
+
+		if ( l_start == 0x50 )
+		{
+		    // move one back 
+		    l_LogData.seek( -1 , l_LogData.CURRENT );   
+		    
+		    // now check if it was the header
+		    l_LogData >> l_tmp;
+		}  
+                 if ( ( l_hndl = l_LogData.getLastError() ) )
+                {
+                    break;
+                }
+
+
+	    }
+            if(l_LogData.size() <= l_LogData.seek(0,l_LogData.CURRENT ))
+              break;
+
+	    // move two back 
+	    l_LogData.seek( -2 , l_LogData.CURRENT );   
+	    
+	    // add to vector
+	    o_list.push_back( new ErrlEntry() );
+	    
+	    // unflatten	
+//            printf("Unflatten starts %d \n", l_LogData.seek( 0 , l_LogData.CURRENT ));
+	    l_rc = o_list[o_list.size()-1]->unflatten(l_LogData);
+//             printf("Unflattenned successfully:%d \n", l_LogData.seek( 0 , l_LogData.CURRENT ));
+//            printf("Unflattenned errorlog id: %x, %d\n",  o_list[o_list.size()-1]->eid(), l_LogData.seek( 0 , l_LogData.CURRENT ));
+	    if ( l_rc != ERRL_STATUS_SUCCESS)
+	    {
+		// remove last log since it did NOT unflatten
+		o_list.pop_back();
+//		break;
+	    }
+            else
+            {
+               
+            }
+	} 
+
+	// Update the status if there's no input data
+	if ( l_LogData.size() == 0 )
+	{
+	    l_rc = ERRL_STATUS_SHORT_SIZE;
+	}
+
+    if ( l_rc == ERRL_STATUS_CORRUPT && o_list.size() )   //set the status somehow
+    {
+	l_rc = ERRL_STATUS_SUCCESS;
+    }
+    
+    // Cleanup
+    delete l_pFile;
+    l_pFile = 0;
+    //printf("LoadLogs returns %d\n",l_rc);
+    
+    return l_rc;
+
+}
+
+/*****************************************************************************/
+// Drop log to parser
+/*****************************************************************************/
+void errlPrintLog( ErrlEntry & i_Log, arguments & i_args )
+{
+    // Locals
+    errlslen_t          l_len;
+    comp_id_t           l_cid;
+    errlsubsec_t        l_sst;
+    errlver_t           l_ver;
+    errlidx_t           l_idx = 1;
+    const void *        l_p = 0;
+    struct  stat        l_stat;
+    std::string         l_strfile;
+    std::string     l_strfileHB;
+    bool            l_dispFull = false;
+
+    l_strfileHB = "hbotStringFile"; 
+    l_strfile  = "trexStringFile";
+
+    
+    
+    // check if --long option is set. if so we need to print the hexdump of trace UD sections as well
+    if(i_args.iv_ltrace)
+    {
+        l_dispFull = true;
+    }
+
+    // 0. Display the log
+    i_Log.print( g_Parser, l_dispFull );
+
+    // check if we were told to skip the displaying of the trace, if so we are done.
+    if ( i_args.iv_skipTrace != true )
+    {
+        // 1. Check to make sure
+        //    a) The string file exists, otherwise exit
+        if ( i_args.iv_trace )
+        {
+            l_strfile = i_args.iv_trace;
+            l_strfileHB = i_args.iv_trace;
+        }
+        // check if the file passed in exists
+        if (( stat( l_strfile.c_str(), &l_stat ) < 0 ) ||
+            ( stat( l_strfileHB.c_str(), &l_stat ) < 0 ))  
+        {
+            if ( l_strfile.empty() && l_strfileHB.empty() )  
+            {
+                // String file not found, bail out
+                printf("W> errlPrintLog: %s was not found, skipping trace\n",l_strfile.c_str());
+                return;
+            }
+        }
+        // add a space
+        l_strfile += " ";
+        l_strfileHB += " ";
+
+        // 2. Find trace sections
+        while ( ( l_p = i_Log.getUsrDtls( l_len, l_cid, l_sst, l_ver, l_idx ) ) )
+        {
+            std::ostringstream  l_str;
+
+            if ( l_cid == ERRL_COMP_ID && l_sst == ERRL_UDT_TRACE )
+            {
+                // 3. Generate file names
+                l_str << "/tmp/" << std::hex << i_Log.eid() << "-";
+                l_str << std::dec << getpid() << ".trace." << l_idx;
+
+                // 4. Drop each into a temporary file ( id.trace.1, id.trace.2, ... )
+                std::ofstream   out( l_str.str().c_str(), ios::binary );
+                if ( !out )
+                {
+                    std::cerr << "Error writing " << l_str.str() << std::endl;
+                }
+                else
+                {
+                    
+                    if(l_len == 4 )
+		    {
+                        ++l_idx;
+			out.close();
+                        continue;
+		    }
+
+                    g_TempFiles.push_back( l_str.str() );
+                    out.write( (char*)l_p, l_len );
+                    out.close();
+                }
+            }
+            else                                                            //cs01below
+            {
+                if ( (l_cid == ERRL_COMP_ID) && (l_sst == ERRL_UDT_HB_TRACE) )
+                {
+                    l_str << "/tmp/" << std::hex << i_Log.eid() << "-";
+                    l_str << std::dec << getpid() << ".trace." << l_idx;
+
+                    // 4a. Drop each into a temporary file ( id.trace.1, id.trace.2, ... )
+                    std::ofstream   out( l_str.str().c_str(), ios::binary );
+                    if ( !out )
+                    {
+                        std::cerr << "Error writing " << l_str.str() << std::endl;
+                    }
+                    else
+                    {
+                        if(l_len == 4 )
+                        {
+                            ++l_idx;
+                            out.close();
+                            continue;
+                        }
+                        g_TempFilesHB.push_back( l_str.str() );
+                        out.write( (char*)l_p, l_len );
+                        out.close();
+
+                     }
+                }
+            }                                                           //cs01above
+
+            // Advance
+            ++l_idx;
+        }
+
+        // 5. Build the trace call
+
+        if ( g_TempFiles.size() )
+        {
+            std::ostringstream  l_str;
+            l_str << "fsp-trace -s ";
+            if ( i_args.iv_trace )
+            {
+                l_str << i_args.iv_trace << " ";
+            }
+            else
+            {
+                //l_str << "/nfs/bin/trexStringFile ";
+                l_str << l_strfile;
+            }
+            for ( size_t i = 0; i < g_TempFiles.size(); i++ )
+            {
+                l_str << g_TempFiles[i] << " ";
+            }
+
+            // 5a. Call the trace tool to decode and print that out
+            std::cout << "Calling " << l_str.str() << "..." << std::endl;
+            system( l_str.str().c_str() );
+        }
+
+        // 5.1. Build the trace call for HB             //cs01below
+        if ( g_TempFilesHB.size() )
+        {
+            printf("\nBuilding hostboot trace call\n");
+            std::ostringstream  l_str;
+            l_str << "fsp-trace -s ";
+            l_str << l_strfileHB;
+            for ( size_t i = 0; i < g_TempFilesHB.size(); i++ )
+            {
+                l_str << g_TempFilesHB[i] << " ";
+            }
+
+            //5a.1 Call trace tool to decode HB trace and print that out
+            std::cout << "Calling " << l_str.str() << "..." << std::endl;
+            system( l_str.str().c_str() );
+        }                                               //cs01above
+
+        // 6. Cleanup the trace files - also done by percCleanup
+        for ( size_t i = 0; i < g_TempFiles.size(); i++ )
+        {
+            remove( g_TempFiles[i].c_str() );
+        }
+
+        // 7. Clear out the global
+        g_TempFiles.clear();
+        g_TempFilesHB.clear();                              //cs01a
+    }
+
+
+}
+

@@ -1,0 +1,373 @@
+/* IBM_PROLOG_BEGIN_TAG                                                   */
+/* This is an automatically generated prolog.                             */
+/*                                                                        */
+/* $Source: errltool/src/errl.C $                                         */
+/*                                                                        */
+/* OpenPOWER errltool Project                                             */
+/*                                                                        */
+/* Contributors Listed Below - COPYRIGHT 2015                             */
+/* [+] International Business Machines Corp.                              */
+/*                                                                        */
+/*                                                                        */
+/* Licensed under the Apache License, Version 2.0 (the "License");        */
+/* you may not use this file except in compliance with the License.       */
+/* You may obtain a copy of the License at                                */
+/*                                                                        */
+/*     http://www.apache.org/licenses/LICENSE-2.0                         */
+/*                                                                        */
+/* Unless required by applicable law or agreed to in writing, software    */
+/* distributed under the License is distributed on an "AS IS" BASIS,      */
+/* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or        */
+/* implied. See the License for the specific language governing           */
+/* permissions and limitations under the License.                         */
+/*                                                                        */
+/* IBM_PROLOG_END_TAG                                                     */
+/**
+ *  @file errl.C
+ *
+ *  @brief <Brief Description of this file>
+ *
+ *  <Detailed description of what this file does, functions it includes,
+ *  etc,>
+*/
+/**
+ *  @page ChangeLogs Change Logs
+ *  @section ERRL_C errl.C
+ *  @verbatim
+ *
+ *  Flag PTR/DCR#   Userid    Date      Description
+ *  ---  ---------- --------  --------  --------------------------------------
+ *  @endverbatim
+*/
+
+/*****************************************************************************/
+// I n c l u d e s
+/*****************************************************************************/
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <regex.h> 
+//#include <argp.h>   //sm_aix
+#include <cstdlib>   //sm_aix
+#include <iostream>   //sm_aix
+#include <cstring>	// memset     //sm_aix
+#include <memory>    //sm_aix
+#include <list>       //sm_aix
+#include <fstream>     //sm_aix
+#include <vector>    //sm_aix
+#include <string>      //sm_aix
+#include <sstream>       //sm_aix
+
+#include <unistd.h>  //sm_aix start
+#include <stdio.h>
+#include <stdlib.h>
+#include <getopt.h>  //sm_aix end
+
+#include <errlentry.H>
+#include <errlusrparser.H>
+#include <errlcmdline.H>
+#include <utilbase.H>
+#include <utilfile.H>
+#include <utilmem.H>
+#include <errl_service_codes.H>
+#include <errlusrparser.H>
+
+/*****************************************************************************/
+// Synonyms
+/*****************************************************************************/
+typedef std::vector<errlHndl_t>		ToolElogs_t;
+
+
+/*****************************************************************************/
+// ENUM  s
+/*****************************************************************************/
+enum toolstatus_t
+{
+    ERRL_TOOL_SUCCESS		= 0x00,
+    ERRL_TOOL_DISPLAY_FILEENTRY	= 0x02,
+};
+
+const uint32_t ERRL_ENTRY_MAX = 16384;
+
+char      g_buffer[ERRL_ENTRY_MAX];
+
+/*****************************************************************************/
+// F o r w a r d s
+/*****************************************************************************/
+toolstatus_t errlDisplayEntryFromFile( arguments & i_args);
+errlstatus_t errlLoadLogs( arguments & i_args, ToolElogs_t & o_list );
+void errlPrintLog( ErrlEntry & i_Log, arguments & i_args );
+
+/*****************************************************************************/
+// Global
+/*****************************************************************************/
+ErrlUsrParser	g_Parser( stdout );
+
+
+using namespace std;
+
+void usage ()
+{
+    printf ("\nUsage: errl -d --file=filename\n");
+}
+
+
+/*****************************************************************************/
+// Executable entry point
+/*****************************************************************************/
+int main (int argc, char **argv)
+{
+    toolstatus_t l_rc = ERRL_TOOL_SUCCESS; 
+    // Argument table: Set to defaults
+    arguments args;
+    memset(&args,0,sizeof(args));
+
+
+    /* Parse our arguments; every option seen by parse_opt will
+    be reflected in arguments. */
+    //argp_parse (&argp, argc, argv, 0, 0, &args);      //sm_aix
+
+    // Decode command line
+ /*   switch ( args.iv_operation )
+    {
+	case DISPLAY:
+        if (args.iv_filename)
+        {
+            l_rc = errlDisplayEntryFromFile( args );
+        }
+	    break;
+
+	default:
+	    break;
+
+    } */  //sm_aix
+    
+     //sm_aix start for getopt_long
+
+     //specifying the expected options
+     static struct option long_options[] =
+     {
+         {"description",  no_argument,    0, 'd'},
+         {"file"  ,       required_argument,  0, 'f'},
+         {0,0,0,0}
+     };
+
+     int opt = 0;
+     int long_index = 0;
+     int DISPLAY = 0;
+
+     if ( argc == 1 )
+     {
+        usage();
+     }
+
+     while ( (opt = getopt_long(argc, argv, "df:", long_options, &long_index)) != -1)
+     {
+         switch (opt)
+         {
+             case 'd': DISPLAY = 1;
+                       break;
+             case 'f' :
+             {
+                 if ( DISPLAY )
+                 {
+                    //errlDisplayEntryFromFile(optarg);
+                    l_rc = errlDisplayEntryFromFile( optarg );
+                 }
+                 else
+                 {
+                     usage();
+                 }
+             }
+                  break;
+             default: usage();
+          }
+      }//end while
+           
+     //sm_aix end for getopt_long
+    
+    return (int)l_rc;
+}
+
+
+/*****************************************************************************/
+// Display Entry From File specified 
+/*****************************************************************************/
+toolstatus_t errlDisplayEntryFromFile( arguments & i_args)
+{
+    toolstatus_t   l_rc = ERRL_TOOL_SUCCESS;
+    errlstatus_t   l_sts = ERRL_STATUS_SUCCESS;
+    ToolElogs_t	   l_elogs;
+    errlHndl_t	   l_errl;
+
+    // Load the log from persistant store & display
+    l_sts = errlLoadLogs( i_args, l_elogs );
+
+    for (uint32_t i=0; i < l_elogs.size(); i++)
+    {
+	l_errl = l_elogs[i];
+	
+	if ( l_sts == ERRL_STATUS_SUCCESS )
+	{
+	     if ( i_args.iv_ptype == RAW )
+	    {
+		
+            g_Parser.PrintHexDump(g_buffer,l_errl->flattenedSize());
+	    }
+	    else 
+	    {
+		errlPrintLog( *l_errl, i_args );
+                
+	    }
+	}
+	else
+	{
+	    cout << "Bad Status returned from parsing attempt from file request.\n";
+	    
+	    l_rc = ERRL_TOOL_DISPLAY_FILEENTRY;	
+	}
+
+	g_Parser.PrintRealBlank();
+    }
+
+    // delete the objects in the vector	
+    for (uint32_t i=0; i< l_elogs.size(); i++)
+    {
+	delete l_elogs[i];
+    }
+
+    
+    return l_rc;
+}
+
+
+
+/*****************************************************************************/
+// Load a log from persistant storage
+/*****************************************************************************/
+errlstatus_t errlLoadLogs( arguments & i_args, ToolElogs_t & o_list )
+{
+    errlstatus_t    l_rc = ERRL_STATUS_SUCCESS;
+    std::string	    l_filename = i_args.iv_filename;
+    UtilFile 	*   l_pFile = 0;
+    UtilMem	    l_LogData;
+    uint32_t 	    l_bufsz = ERRL_ENTRY_MAX; 
+    uint16_t	    l_tmp = 0;
+    bool	    l_eof = false;
+   
+
+    if ( l_filename == "stdin" )
+    {
+	l_pFile = new UtilFile( stdin );
+    }
+    else
+    {
+	l_pFile = new UtilFile( l_filename.c_str() );
+
+	l_pFile->Open( "r" );
+    }
+    
+    // Transfer the data from the file stream to the 
+    // memory buffer
+    while ( 1 )
+    {
+	l_LogData.write( g_buffer, l_pFile->read( g_buffer, l_bufsz ) );
+
+	l_eof = l_pFile->eof();
+
+    if ( l_eof )
+    {
+        break;
+    }
+    }
+
+
+    // Re-create the object
+	l_LogData.seek( 0, l_LogData.START );
+	
+    do
+	{
+	    // reset tmp
+	    l_tmp = 0;
+	    
+	    // Find the log starting point
+	    while ( l_tmp != ERRL_SID_PRIVATE_HEADER )
+	    {
+		uint8_t	l_start = 0;
+		
+		l_LogData >> l_start;
+
+
+		if ( l_start == 0x50 )
+		{
+		    // move one back 
+		    l_LogData.seek( -(int)sizeof(l_start) , l_LogData.CURRENT );   
+		    
+		    // now check if it was the header
+		    l_LogData >> l_tmp;
+		}  
+
+	    }
+	    // move two back 
+	    l_LogData.seek( -(int)sizeof(l_tmp) , l_LogData.CURRENT );   
+	    
+	    // add to vector
+	    o_list.push_back( new ErrlEntry() );
+	    
+	    // unflatten	
+	    l_rc = o_list[o_list.size()-1]->unflatten(l_LogData);
+
+
+	    if ( l_rc != ERRL_STATUS_SUCCESS)
+	    {
+		// remove last log since it did NOT unflatten
+		o_list.pop_back();
+		break;
+	    }
+        else
+        {
+            break;
+        }
+	} while(0);
+
+
+	// Update the status if there's no input data
+	if ( l_LogData.size() == 0 )
+	{
+	    l_rc = ERRL_STATUS_SHORT_SIZE;
+	}
+
+    if ( l_rc == ERRL_STATUS_CORRUPT && o_list.size() )   //set the status somehow
+    {
+	l_rc = ERRL_STATUS_SUCCESS;
+    }
+    
+    // Cleanup
+    delete l_pFile;
+    l_pFile = 0;
+
+    
+    return l_rc;
+
+}
+
+/*****************************************************************************/
+// Drop log to parser
+/*****************************************************************************/
+void errlPrintLog( ErrlEntry & i_Log, arguments & i_args )
+{
+    // Locals
+    bool            l_dispFull = false;
+    
+    
+    // check if --long option is set. if so we need to print the hexdump of trace UD sections as well
+    if(i_args.iv_ltrace)
+    {
+        l_dispFull = true;
+    }
+
+    // 0. Display the log
+    i_Log.print( g_Parser, l_dispFull );
+
+}
+
