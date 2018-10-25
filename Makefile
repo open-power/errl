@@ -12,14 +12,17 @@ endif
 
 ARCH = $(shell uname)
 
-SUBDIRS = elog-parse plugins plugins_p8
+#SUBDIRS = elog-parse plugins plugins_p8
+SUBDIRS = elog-parse
 
 CMDS = errl_p8 errl
 
-LIBPATHS += -L./elog-parse -L./plugins/fspplugins -L./plugins/hbplugins -L./plugins/hbplugins/prdf
-LIBPATHS_P8 += -L./elog-parse -L./plugins/fspplugins -L./plugins_p8/hbplugins -L./plugins_p8/hbplugins/prdf
+#LIBPATHS += -L./elog-parse -L./plugins/fspplugins -L./plugins/hbplugins -L./plugins/hbplugins/prdf
+#LIBPATHS_P8 += -L./elog-parse -L./plugins/fspplugins -L./plugins_p8/hbplugins -L./plugins_p8/hbplugins/prdf
+LIBPATHS += -L./elog-parse
+LIBPATHS_P8 += -L./elog-parse
 
-LDLIBS += -lfspplugins -lhbplugins -lhbprdfplugins -lelogparse
+LDLIBS += -lelogparse
 
 ifeq ($(ARCH),AIX)
 	LDLIBS += -lpopt
@@ -38,9 +41,9 @@ deps:
 	@echo "Building elog-parse..."
 	@$(MAKE) -C elog-parse
 	@echo "Building p8 plugins..."
-	@$(MAKE) -C plugins_p8
+#	@$(MAKE) -C plugins_p8
 	@echo "Building p9 plugins..."
-	@$(MAKE) -C plugins
+#	@$(MAKE) -C plugins
 
 errl_p8:errl.C
 	$(Q)@echo "Building $(WORK_DIR)/$@"
