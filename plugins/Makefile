@@ -14,12 +14,13 @@ Q = @
 endif
 endif
 
-SUBDIRS = hbplugins fspplugins
+#SUBDIRS = hbplugins fspplugins
+SUBDIRS = hbplugins
 
 all: 
 	@echo "Building hbplugins..."
 	@$(MAKE) -C hbplugins
-	@$(MAKE) -C fspplugins
+#	@$(MAKE) -C fspplugins
 
 clean:
 	@echo "Cleaning up $(WORK_DIR) files..."

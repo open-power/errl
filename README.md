@@ -1,19 +1,20 @@
 # errl
-To compile in PowerLinux or x86Linux execute
-make
+To compile in PowerLinux or x86Linux without plugins:
+execute
 
-make errl
+make without_plugins
 
 make clean
 
-make clobber_all
+make clobber_all_wp
 
-To compile in AIX execute:
-gmake -R
-
-gmake -R errl
+To compile in AIX  without plugins execute:
+gmake -R without_plugins
 
 gmake -R clean
 
-gmake -R clobber_all
+gmake -R clobber_all_wp
+
+If you wish to build the errl tool with plugins, please clone op-build.git
+and make errltool package.
 
