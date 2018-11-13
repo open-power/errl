@@ -25,7 +25,7 @@ LIBPATHS_P8 += -L./elog-parse
 LIBPATHS_WP += -L./elog-parse
 
 #LDLIBS += -lfspplugins -lhbplugins -lhbprdfplugins -lelogparse
-LDLIBS += -lhbplugins -lelogparse
+LDLIBS += -lhbplugins -lhbprdfplugins -lelogparse
 LDLIBS_WP += -lelogparse
 
 ifeq ($(ARCH),AIX)
